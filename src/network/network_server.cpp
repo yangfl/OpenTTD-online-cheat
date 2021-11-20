@@ -1309,6 +1309,90 @@ void NetworkServerSendExternalChat(const std::string &source, TextColour colour,
 	NetworkTextMessage(NETWORK_ACTION_EXTERNAL_CHAT, colour, false, user, msg, 0, source);
 }
 
+void NetworkServerSendCommandResult(ClientID client_id, const std::string &cmd, const std::vector<std::string> &results, DestType desttype, int dest)
+{
+	/* No sending to the server */
+	if (desttype != DESTTYPE_TEAM && (ClientID)dest == CLIENT_ID_SERVER) return;
+
+	constexpr NetworkAction action = NETWORK_ACTION_SERVER_MESSAGE;
+	constexpr int64 data = 0;
+
+	/* Find the sender */
+	NetworkClientSocket *cs_src = nullptr;
+	for (NetworkClientSocket *cs : NetworkClientSocket::Iterate()) {
+		if (cs->client_id == client_id) {
+			cs_src = cs;
+			/* Display the result to the sender */
+			for (const std::string &result : results) {
+				cs_src->SendChat(action, CLIENT_ID_SERVER, false, result, data);
+			}
+			goto client_found;
+		}
+	}
+	Debug(net, 1, "Received unknown client_id {}", client_id);
+client_found:
+
+	/* Display the result locally */
+	const NetworkClientInfo *ci_src = NetworkClientInfo::GetByClientID(client_id);
+	const std::string &client_name = ci_src == nullptr ? "(unknown)" : ci_src->client_name;
+	std::string echo = fmt::format("user {} send command: {}", ci_src == nullptr ? "(unknown)" : ci_src->client_name, cmd);
+
+	IConsolePrint(CC_INFO, echo);
+	if (_settings_client.network.server_admin_chat) {
+		NetworkAdminChat(action, desttype, client_id, echo, data, true);
+	}
+	for (const std::string &result : results) {
+		IConsolePrint(CC_INFO, result);
+		if (_settings_client.network.server_admin_chat) {
+			NetworkAdminChat(action, desttype, client_id, result, data, true);
+		}
+	}
+
+	/* Display the result to the receiver */
+	switch (desttype) {
+		case DESTTYPE_CLIENT:
+			if ((ClientID)dest == INVALID_CLIENT_ID) break;
+			for (NetworkClientSocket *cs : NetworkClientSocket::Iterate()) {
+				if (cs->client_id == (ClientID)dest) {
+					if (cs != cs_src) {
+						cs->SendChat(action, CLIENT_ID_SERVER, false, echo, data);
+						for (const std::string &result : results) {
+							cs->SendChat(action, CLIENT_ID_SERVER, false, result, data);
+						}
+					}
+					break;
+				}
+			}
+			break;
+		case DESTTYPE_TEAM: {
+			/* Find all clients that belong to this company */
+			for (NetworkClientSocket *cs : NetworkClientSocket::Iterate()) {
+				if (cs == cs_src) continue;
+				NetworkClientInfo *ci = cs->GetInfo();
+				if (ci != nullptr && ci->client_playas == (CompanyID)dest) {
+					cs->SendChat(action, CLIENT_ID_SERVER, false, echo, data);
+					for (const std::string &result : results) {
+						cs->SendChat(action, CLIENT_ID_SERVER, false, result, data);
+					}
+				}
+			}
+			break;
+		}
+		default:
+			Debug(net, 1, "Received unknown chat destination type {}; doing broadcast instead", desttype);
+			FALLTHROUGH;
+		case DESTTYPE_BROADCAST:
+			for (NetworkClientSocket *cs : NetworkClientSocket::Iterate()) {
+				if (cs == cs_src) continue;
+				cs->SendChat(action, CLIENT_ID_SERVER, false, echo, data);
+				for (const std::string &result : results) {
+					cs->SendChat(action, CLIENT_ID_SERVER, false, result, data);
+				}
+			}
+			break;
+	}
+}
+
 NetworkRecvStatus ServerNetworkGameSocketHandler::Receive_CLIENT_CHAT(Packet *p)
 {
 	if (this->status < STATUS_PRE_ACTIVE) {
@@ -1328,6 +1412,67 @@ NetworkRecvStatus ServerNetworkGameSocketHandler::Receive_CLIENT_CHAT(Packet *p)
 		case NETWORK_ACTION_CHAT:
 		case NETWORK_ACTION_CHAT_CLIENT:
 		case NETWORK_ACTION_CHAT_COMPANY:
+			if (msg[0] == '!') {
+				msg = msg.substr(1);
+
+				std::string::size_type sep_pos = msg.find(' ');
+				std::string cmd = msg;
+				std::string args = "";
+				if (sep_pos != std::string::npos) {
+					args = msg.substr(sep_pos + 1);
+					cmd = msg.substr(0, sep_pos);
+				}
+
+				std::vector<std::string> results;
+				do {
+					if (cmd == "help") {
+						results.push_back("Available commands: gm");
+					} else if (cmd == "gm") {
+						if (args.empty()) {
+							results.push_back("Give me money (in game credit), note we cannot detect your currency setting. Usage: 'gm <money>'.");
+							break;
+						}
+
+						std::string::size_type sz = 0;
+						int64 money;
+						try {
+							money = std::stoll(args, &sz);
+							if (args[sz] != '\0' && args[sz] != ' ') throw sz;
+						} catch (...) {
+							results.push_back("'" + args + "' does not looks like an integer!");
+							break;
+						}
+						if (money == 0) {
+							results.push_back("Money is 0, do nothing.");
+							break;
+						}
+
+						Company *c = ci == nullptr ? nullptr : Company::GetIfValid(ci->client_playas);
+						if (c == nullptr) {
+							results.push_back("You are not in a company!");
+							break;
+						}
+
+						money = money >         0x007fffffffffffff ? 0x0080000000000000 :
+						        money < (int64) 0xff80000000000000 ? 0x007fffffffffffff : -money;
+						SubtractMoneyFromCompanyFract(ci->client_playas, CommandCost(EXPENSES_OTHER, money << 8));
+
+						// results.push_back("Added money " + args + ", please rejoin your company.");
+						for (NetworkClientSocket *tcs : NetworkClientSocket::Iterate()) {
+							NetworkClientInfo *tci = tcs->GetInfo();
+							if (tci != nullptr && tci->client_playas == ci->client_playas) {
+								tcs->SendNewGame();
+							}
+						}
+					} else {
+						results.push_back("Command '" + cmd + "' not found.");
+					}
+				} while (0);
+
+				NetworkServerSendCommandResult(ci->client_id, msg, results);
+				break;
+			}
+
 			NetworkServerSendChat(action, desttype, dest, msg, this->client_id, data);
 			break;
 		default:

@@ -79,6 +79,7 @@ void NetworkServerDoMove(ClientID client_id, CompanyID company_id);
 void NetworkServerSendRcon(ClientID client_id, TextColour colour_code, const std::string &string);
 void NetworkServerSendChat(NetworkAction action, DestType type, int dest, const std::string &msg, ClientID from_id, int64 data = 0, bool from_admin = false);
 void NetworkServerSendExternalChat(const std::string &source, TextColour colour, const std::string &user, const std::string &msg);
+void NetworkServerSendCommandResult(ClientID client_id, const std::string &cmd, const std::vector<std::string> &results, DestType type = DESTTYPE_CLIENT, int dest = INVALID_CLIENT_ID);
 
 void NetworkServerKickClient(ClientID client_id, const std::string &reason);
 uint NetworkServerKickOrBanIP(ClientID client_id, bool ban, const std::string &reason);
