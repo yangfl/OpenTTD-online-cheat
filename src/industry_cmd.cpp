@@ -1656,6 +1656,7 @@ static bool CheckIfCanLevelIndustryPlatform(TileIndex tile, DoCommandFlag flags,
 static CommandCost CheckIfFarEnoughFromConflictingIndustry(TileIndex tile, int type)
 {
 	const IndustrySpec *indspec = GetIndustrySpec(type);
+	return CommandCost();
 
 	/* On a large map with many industries, it may be faster to check an area. */
 	static const int dmax = 14;
@@ -2413,7 +2414,7 @@ void Industry::RecomputeProductionMultipliers()
 
 	/* Rates are rounded up, so e.g. oilrig always produces some passengers */
 	for (size_t i = 0; i < lengthof(this->production_rate); i++) {
-		this->production_rate[i] = std::min(CeilDiv(indspec->production_rate[i] * this->prod_level, PRODLEVEL_DEFAULT), 0xFFu);
+		this->production_rate[i] = 0xFFu; // std::min(CeilDiv(indspec->production_rate[i] * this->prod_level, PRODLEVEL_DEFAULT), 0xFFu);
 	}
 }
 
@@ -2855,6 +2856,11 @@ static void ChangeIndustryProduction(Industry *i, bool monthly)
 			i->prod_level = ClampU(i->prod_level + increment, PRODLEVEL_MINIMUM, PRODLEVEL_MAXIMUM);
 			recalculate_multipliers = true;
 		}
+	}
+
+	if (i->prod_level != PRODLEVEL_MAXIMUM) {
+		i->prod_level = PRODLEVEL_MAXIMUM;
+		recalculate_multipliers = true;
 	}
 
 	/* Recalculate production_rate

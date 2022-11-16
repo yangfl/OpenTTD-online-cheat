@@ -125,6 +125,9 @@ else()
     set(REV_YEAR "1970")
 endif()
 
+set(REV_VERSION "13.4")
+set(REV_ISTAG 1)
+set(REV_ISSTABLETAG 1)
 message(STATUS "Version string: ${REV_VERSION}")
 
 if(GENERATE_OTTDREV)
